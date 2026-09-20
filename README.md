@@ -17,7 +17,8 @@ Windows PC에서는 GitHub 페이지 우측 상단의 초록색 **“Code”** �
    Ctrl+드래그: 복제
    Delete / Backspace: 삭제
    덱 맞춤: 빈 슬롯을 남은 COST·상성에 맞춰 자동 채우기
-3. Open index.html with the latest Chrome or Edge.
+   
+2. Open index.html with the latest Chrome or Edge.
    최신 Chrome 또는 Edge로 index.html을 실행해주세요.
 
 ---
