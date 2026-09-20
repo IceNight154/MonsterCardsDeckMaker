@@ -1,6 +1,6 @@
 # MonsterCards Deck Maker
 
-20260620_ver.0.002
+20260621_ver.0.004
 
 A simple tool for building and previewing your Monster Cards decks in advance.
 
