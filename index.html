@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MONSTER CARDS 덱 메이커</title>
+  <link rel="stylesheet" href="deckmaker.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">MONSTER CARDS</div>
+      <h1>덱 메이커</h1>
+    </div>
+    <div class="top-nav">
+      <button id="deckPageBtn" class="nav-btn active" type="button">덱 메이커</button>
+      <button id="skillPageBtn" class="nav-btn" type="button">스킬 설명</button>
+    </div>
+    <div class="deck-status">
+      <span id="cardCount">0 / 20장</span>
+      <span id="costCount">0 / 200 COST</span>
+    </div>
+  </header>
+
+  <main id="deckPage" class="app page-view">
+    <section class="deck-area">
+      <div class="section-head">
+        <div>
+          <h2>DECK</h2>
+          <p>카드를 클릭해 편집 · 빈 칸의 ＋로 카드 추가</p>
+        </div>
+        <div class="toolbar">
+          <button id="newDeckBtn" class="ghost">새 덱</button>
+          <button id="exportBtn">JSON 저장</button>
+          <label class="file-btn">JSON 불러오기<input id="importInput" type="file" accept=".json,application/json"></label>
+        </div>
+      </div>
+      <div id="deckGrid" class="deck-grid"></div>
+    </section>
+
+    <aside class="side">
+      <div class="panel" id="editorPanel">
+        <div class="panel-head">
+          <div>
+            <div class="eyebrow">SELECTED CARD</div>
+            <h2 id="editorTitle">카드를 선택하세요</h2>
+          </div>
+          <div id="selectedCost" class="big-cost">—</div>
+        </div>
+
+        <div id="editorEmpty" class="empty-state">
+          <div class="plus-large">＋</div>
+          <p>덱의 카드 슬롯을 선택하면<br>카드 정보를 편집할 수 있습니다.</p>
+        </div>
+
+        <form id="editorForm" class="editor-form hidden">
+          <label>카드 컨셉<input id="fName" type="text" placeholder="예: 화룡의 포효"></label>
+
+          <div class="form-grid">
+            <label>레어도<select id="fRarity"></select></label>
+            <label>스킬<select id="fSkill"></select></label>
+            <div class="logo-preview" id="skillLogoPreview"></div>
+            <label>속성<select id="fElement"></select></label>
+            <label>종족<select id="fSpecies"></select></label>
+            <div class="logo-preview" id="speciesLogoPreview"></div>
+            <label>수단<select id="fMeans"></select></label>
+            <div class="logo-preview" id="meansLogoPreview"></div>
+            <label>크기<select id="fSize"></select></label>
+            <div class="logo-preview" id="sizeLogoPreview"></div>
+            <label>ATK<select id="fAtk"></select></label>
+            <label>수량<input id="fQty" type="number" min="1" max="20" value="1"></label>
+          </div>
+
+          <div class="cost-breakdown">
+            <div><span>레어도</span><b id="costRarity">0</b></div>
+            <div><span>ATK</span><b id="costAtk">0</b></div>
+            <div><span>스킬</span><b id="costSkill">0</b></div>
+            <div class="total"><span>카드 COST</span><b id="costTotal">0</b></div>
+          </div>
+
+          <div class="actions">
+            <button id="copyCardBtn" type="button">카드 복사</button>
+            <button id="pasteCardBtn" type="button">카드 붙여넣기</button>
+            <button id="duplicateBtn" type="button">카드 복제</button>
+            <button id="deleteBtn" type="button" class="danger">카드 삭제</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel compatibility">
+        <div class="panel-head compact">
+          <div>
+            <div class="eyebrow">COMPATIBILITY</div>
+            <h2>상성표</h2>
+          </div>
+          <a href="https://gasai.dev/261ef85858774b7a94df60493447c534" target="_blank" rel="noopener">공식 표 ↗</a>
+        </div>
+        <div class="chart-tabs">
+          <button class="active" data-chart="element">속성</button>
+          <button data-chart="species">종족</button>
+          <button data-chart="means">수단</button>
+          <button data-chart="size">크기</button>
+        </div>
+        <img id="compatibilityImage" class="compatibility-image" alt="MONSTER CARDS 공식 상성표">
+        <p id="compatibilityNote" class="compat-note"></p>
+      </div>
+    </aside>
+  </main>
+
+
+  <main id="skillPage" class="skill-page page-view hidden">
+    <section class="skill-header panel">
+      <div>
+        <div class="eyebrow">MONSTER CARDS / SKILLS</div>
+        <h2>스킬 상세 설명</h2>
+        <p>스킬의 종류, 팩, COST, 효과 분류와 상세 효과를 확인할 수 있습니다.</p>
+      </div>
+      <div class="skill-tools">
+        <input id="skillSearch" type="search" placeholder="스킬 이름 또는 효과 검색">
+        <select id="skillPackFilter"><option value="">전체 팩</option></select>
+        <select id="skillTypeFilter"><option value="">전체 유형</option></select>
+      </div>
+    </section>
+    <section class="skill-layout">
+      <div class="skill-list panel" id="skillList"></div>
+      <aside class="skill-detail panel" id="skillDetail">
+        <div class="empty-state">
+          <div class="plus-large">?</div>
+          <p>왼쪽에서 스킬을 선택하면<br>상세 설명이 표시됩니다.</p>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <footer>
+    <span>덱 제한: 20장 / 200 COST</span>
+    <span>데이터 기준: 제공된 덱메이커 XLSX + MONSTER CARDS 공식 상성표</span>
+  </footer>
+
+  <script src="deckmaker_app.js"></script>
+</body>
+</html>
