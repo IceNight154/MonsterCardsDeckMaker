@@ -1,5 +1,7 @@
 # MonsterCards Deck Maker
 
+20260620_ver.0.002
+
 A simple tool for building and previewing your Monster Cards decks in advance.
 
 On a Windows PC, you can download this project from GitHub by clicking the green **“Code”** button in the upper-right corner, then selecting **“Download ZIP.”**
@@ -45,5 +47,3 @@ Do not sell this program or use it for commercial or profit-making purposes.<br 
 
 You are responsible for how you use this program.<br />
 프로그램 사용에 대한 책임은 사용자 본인에게 있습니다.<br />
-
-...
