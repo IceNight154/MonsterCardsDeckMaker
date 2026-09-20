@@ -1430,16 +1430,11 @@ const DECK_EXTRA_CSS = `
 }
 /* 에디터·상성 패널 sticky 는 두 패널이 나란히 놓이는 3열 배치에서만 적용
  * (2열/1열에서는 에디터 아래에 상성 패널이 쌓이므로, sticky 면 스크롤 시 패널을 덮는다)
- * 상성 패널은 Card Editor 처럼 스크롤을 따라 화면에 붙어 다니며,
- * 화면보다 길어지면(전체 상성 보기 등) 패널 안에서 스크롤된다. */
+ * 상성 패널은 Card Editor 처럼 스크롤을 따라 화면에 붙어 다닌다. (내부 스크롤 없이 내용 높이에 맞춰 늘어난다) */
 .editorCard { position: static; }
 @container deckpage (min-width: 1180px) {
   .editorCard { position: sticky; top: 20px; }
-  .matchupCard {
-    position: sticky; top: 20px;
-    max-height: calc(100vh - 40px);
-    overflow-y: auto; scrollbar-width: thin;
-  }
+  .matchupCard { position: sticky; top: 20px; }
 }
 .editorCard { min-width: 0; }
 .editorCard .row { grid-template-columns: 90px minmax(0, 1fr); }
