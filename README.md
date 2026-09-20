@@ -22,7 +22,7 @@ Windows PC에서는 GitHub 페이지 우측 상단의 초록색 **“Code”** �
 
 ---
 
-##Language Support / 언어 지원
+## Language Support / 언어 지원
 
 Currently supported languages:
 현재 지원 언어:
