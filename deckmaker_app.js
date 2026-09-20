@@ -618,7 +618,9 @@ const STORAGE_KEY = "monsterCardsDeckMakerV1";
 const state = {
   deck: [],
   selected: -1,
-  dragging: -1
+  dragging: -1,
+  dragGroup: null,     // 여러 장을 함께 드래그 중일 때, 드래그하는 카드들의 슬롯 번호 배열
+  multi: new Set()     // 범위 선택된 카드 id 집합 (2장 이상일 때만 '그룹 선택' 상태)
 };
 let autoUndo = null;   // 덱 맞춤 직전 상태(되돌리기용). 다른 편집이 생기면 null 로 초기화된다.
 
@@ -1426,11 +1428,18 @@ const DECK_EXTRA_CSS = `
     grid-template-areas: "editor matchup deck";
   }
 }
-/* 에디터 sticky 는 상성 패널이 옆 칸에 있는 3열 배치에서만 적용
- * (2열/1열에서는 에디터 아래에 상성 패널이 쌓이므로, sticky 면 스크롤 시 패널을 덮는다) */
+/* 에디터·상성 패널 sticky 는 두 패널이 나란히 놓이는 3열 배치에서만 적용
+ * (2열/1열에서는 에디터 아래에 상성 패널이 쌓이므로, sticky 면 스크롤 시 패널을 덮는다)
+ * 상성 패널은 Card Editor 처럼 스크롤을 따라 화면에 붙어 다니며,
+ * 화면보다 길어지면(전체 상성 보기 등) 패널 안에서 스크롤된다. */
 .editorCard { position: static; }
 @container deckpage (min-width: 1180px) {
   .editorCard { position: sticky; top: 20px; }
+  .matchupCard {
+    position: sticky; top: 20px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto; scrollbar-width: thin;
+  }
 }
 .editorCard { min-width: 0; }
 .editorCard .row { grid-template-columns: 90px minmax(0, 1fr); }
@@ -1506,6 +1515,9 @@ button.danger { background: var(--danger); color: #fff; }
 .mc-slot.is-empty:hover { color: var(--accent); border-color: var(--accent); }
 .mc-slot.is-selected { box-shadow: 0 0 0 2px var(--accent), 0 8px 24px rgba(212,255,0,.18); }
 .mc-slot.is-dragging { opacity: .4; }
+/* 범위 선택된 카드(그룹) / 드래그 중 미리보기 */
+.mc-slot.is-multi { box-shadow: 0 0 0 2px var(--accent), 0 8px 24px rgba(212,255,0,.18); }
+.mc-slot.is-marquee { outline: 2px dashed var(--accent); outline-offset: 2px; }
 .mc-slot.is-over { box-shadow: 0 0 0 3px var(--accent2); }
 /* 카드 사이 삽입 표시 */
 .mc-slot.is-insert-before::before,
@@ -1692,6 +1704,53 @@ button.danger { background: var(--danger); color: #fff; }
 .mc-rarity-empty { color: var(--muted, #98989d); }
 .mc-rarity-common { margin-left: 6px; padding: 1px 7px; border-radius: 9999px; background: #2c2c2e; color: var(--muted, #98989d); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .mc-rarity-note { margin: 10px 2px 0; color: var(--muted, #98989d); font-size: 12px; line-height: 1.6; }
+
+/* 덱: 범위 드래그 선택 상자 / 선택 작업 바 / 카드 호버 스킬 정보
+ * (#deckPage 는 container-type 때문에 fixed 요소의 기준이 되므로, 아래 요소들은 body 에 직접 붙인다) */
+.mc-marquee {
+  position: fixed; z-index: 40; pointer-events: none;
+  border: 1px solid var(--accent); background: rgba(212,255,0,.12); border-radius: 4px;
+}
+body.mc-marquee-active, body.mc-marquee-active * { user-select: none; -webkit-user-select: none; cursor: crosshair !important; }
+
+.mc-selbar {
+  position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 45;
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px;
+  max-width: calc(100vw - 24px); box-sizing: border-box;
+  padding: 8px 10px 8px 16px; border-radius: 16px;
+  background: #1c1c1e; border: 1px solid var(--accent); box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
+#deckPage.hidden ~ #selectionBar { display: none !important; }
+.mc-selbar-count { font-size: 14px; font-weight: 800; color: var(--accent); white-space: nowrap; margin-right: 4px; }
+.mc-selbar button { margin: 0; padding: 8px 14px; font-size: 13px; }
+
+.mc-cardtip {
+  position: fixed; left: 0; top: 0; z-index: 60; width: max-content; max-width: min(320px, calc(100vw - 16px));
+  box-sizing: border-box; padding: 12px 14px; border-radius: 12px;
+  background: #1c1c1e; color: var(--ink, #f5f5f7); border: 1px solid var(--line, #3a3a3c);
+  box-shadow: 0 12px 32px rgba(0,0,0,.55); font-size: 13px; line-height: 1.5;
+  pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s ease;
+}
+.mc-cardtip.show { opacity: 1; visibility: visible; }
+.mc-tip-card { font-size: 11px; font-weight: 700; color: var(--muted, #98989d); margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-tip-skill { display: flex; align-items: center; gap: 10px; }
+.mc-tip-skill img { flex: 0 0 auto; width: 40px; height: 40px; object-fit: contain; }
+.mc-tip-skillname { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mc-tip-skillname b { font-size: 15px; font-weight: 800; }
+.mc-tip-skillname small { font-size: 11px; color: var(--muted, #98989d); }
+.mc-tip-cost { flex: 0 0 auto; font-size: 20px; font-weight: 800; color: var(--accent, #d4ff00); white-space: nowrap; }
+.mc-tip-cost small { font-size: 10px; color: var(--muted, #98989d); font-weight: 700; }
+.mc-tip-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
+.mc-tip-tags span { padding: 2px 9px; border-radius: 9999px; background: #2c2c2e; font-size: 11px; font-weight: 700; }
+.mc-tip-tags span[data-type="GameChanger"] { background: #9532FF; color: #fff; }
+.mc-tip-tags span[data-type="Discard"] { background: #0000B3; color: #fff; }
+.mc-tip-desc { margin: 0; font-size: 13px; }
+.mc-tip-tier { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; align-items: start; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line, #3a3a3c); }
+.mc-tip-tier b { display: inline-block; padding: 1px 0; border-radius: 9999px; background: #2c2c2e; font-size: 11px; font-weight: 800; text-align: center; }
+.mc-tip-tier[data-tier="SR"] b { color: #5ac8fa; }
+.mc-tip-tier[data-tier="UR"] b { color: var(--accent, #d4ff00); }
+.mc-tip-none { font-size: 13px; color: var(--muted, #98989d); }
+.mc-tip-auto { margin-top: 8px; font-size: 11px; color: #7dd3fc; }
 
 /* 클립보드 알림 */
 .mc-clipboard-notice {
@@ -1890,7 +1949,7 @@ function buildUI() {
           <div>
             <span class="eyebrow">Deck</span>
             <h2>덱 구성</h2>
-            <p class="sectionDescription muted">클릭: 선택 · 드래그: 순서 변경 · <b>Ctrl+드래그: 복제</b> · <b>Delete / Backspace: 삭제</b> · <b>덱 맞춤</b>: 빈 슬롯을 남은 COST·상성에 맞춰 자동 채우기</p>
+            <p class="sectionDescription muted">클릭: 선택 · 드래그: 순서 변경 · <b>Ctrl+드래그: 복제</b> · <b>Delete / Backspace: 삭제</b> · <b>빈 곳에서 드래그: 범위 선택</b>(선택한 카드를 한꺼번에 이동·복제·삭제, Shift/Ctrl+드래그·클릭은 선택 추가) · 카드에 마우스를 올리면 스킬 정보 표시 · <b>덱 맞춤</b>: 빈 슬롯을 남은 COST·상성에 맞춰 자동 채우기</p>
           </div>
           <div class="deckActions">
             <div class="buttonRow">
@@ -1924,6 +1983,14 @@ function buildUI() {
       <div class="compatImgWrap"><img id="compatibilityImage" alt="공식 상성표"></div>
     </section>
   </main>
+
+  <div id="selectionBar" class="mc-selbar hidden" role="toolbar" aria-label="선택한 카드 작업">
+    <span id="selectionCount" class="mc-selbar-count"></span>
+    <button type="button" id="selDuplicate" title="선택한 카드를 빈 슬롯에 복제합니다 (Ctrl+드래그로 원하는 위치에 복제할 수도 있습니다)">복제</button>
+    <button type="button" id="selCopy" class="secondary" title="선택한 카드를 클립보드에 복사합니다 (Ctrl+C) · Ctrl+V 로 붙여넣기">복사</button>
+    <button type="button" id="selDelete" class="danger" title="선택한 카드를 삭제합니다 (Delete)">삭제</button>
+    <button type="button" id="selClear" class="secondary" title="선택 해제 (Esc)">선택 해제</button>
+  </div>
 
   <main id="skillPage" class="tabPanel hidden">
     <section class="card">
@@ -2282,6 +2349,8 @@ function renderMatchup(card, force) {
 function renderGrid() {
   const grid = $("deckGrid");
   grid.innerHTML = "";
+  if (state.multi.size && groupIndices().length < 2) state.multi = new Set();   // 사라진 카드가 있으면 그룹 선택 해제
+  const slotEls = [];
   const isCopy = (e) => e.ctrlKey || e.metaKey; // Ctrl(Mac은 Cmd) + 드래그 = 복제
   const dash = `<span class="mc-face-placeholder">—</span>`;
 
@@ -2302,8 +2371,24 @@ function renderGrid() {
     return gap > from ? gap - 1 : gap;
   }
 
+  function clearGroupPreview() {
+    slotEls.forEach(el => el.classList.remove("is-over"));
+  }
+
   function attachDropHandlers(slot, i) {
     slot.addEventListener("dragover", (e) => {
+      // 여러 장을 함께 드래그 중: 잡은 카드와 놓는 칸의 (행, 열) 차이만큼 전체를 평행 이동해 미리보기
+      if (state.dragGroup) {
+        clearGroupPreview();
+        if (state.dragging === i) return;                         // 제자리
+        const dest = groupDestination(state.dragGroup, state.dragging, i);
+        if (!dest) return;                                        // 덱 밖으로 나가면 놓을 수 없음
+        if (isCopy(e) && dest.some(d => state.deck[d])) return;   // 복제는 빈 슬롯에만
+        e.preventDefault();
+        e.dataTransfer.dropEffect = isCopy(e) ? "copy" : "move";
+        dest.forEach(d => slotEls[d].classList.add("is-over"));
+        return;
+      }
       if (state.dragging < 0 || state.dragging === i) return;
       if (isCopy(e) && state.deck[i]) return; // 복제는 빈 슬롯에만 놓을 수 있음
       const zone = isCopy(e) ? "swap" : dropZone(e, slot, i);
@@ -2316,9 +2401,19 @@ function renderGrid() {
       clearZone(slot);
       slot.classList.add(zone === "before" ? "is-insert-before" : zone === "after" ? "is-insert-after" : "is-over");
     });
-    slot.addEventListener("dragleave", () => clearZone(slot));
+    slot.addEventListener("dragleave", () => { clearZone(slot); if (state.dragGroup) clearGroupPreview(); });
     slot.addEventListener("drop", (e) => {
       e.preventDefault();
+      if (state.dragGroup) {
+        const grp = state.dragGroup, dest = groupDestination(grp, state.dragging, i);
+        clearGroupPreview();
+        if (!dest) return;
+        if (isCopy(e)) {
+          if (dest.some(d => state.deck[d])) return showNotice("복제는 빈 슬롯에만 놓을 수 있습니다.");
+          copyGroup(grp, dest);
+        } else moveGroup(grp, dest);
+        return;
+      }
       const zone = isCopy(e) ? "swap" : dropZone(e, slot, i);
       clearZone(slot);
       const from = state.dragging >= 0 ? state.dragging : Number(e.dataTransfer.getData("text/plain"));
@@ -2332,7 +2427,10 @@ function renderGrid() {
     const card = state.deck[i];
     const slot = document.createElement("button");
     slot.type = "button";
-    slot.className = "mc-slot" + (i === state.selected ? " is-selected" : "") + (!card ? " is-empty" : "");
+    slot.className = "mc-slot" + (i === state.selected ? " is-selected" : "") + (!card ? " is-empty" : "")
+      + (card && state.multi.has(card.id) ? " is-multi" : "");
+    slot.dataset.index = String(i);
+    slotEls.push(slot);
 
     if (!card) {
       slot.innerHTML = "＋";
@@ -2362,20 +2460,26 @@ function renderGrid() {
       if (card.auto) slot.classList.add("is-auto");
       const skillType = skillInfo(card.skill).type;
       if (skillType === "GameChanger" || skillType === "Discard") slot.dataset.skilltype = skillType;
-      slot.title = (card.auto ? "덱 맞춤으로 추가된 카드 (수정하면 고정됩니다)\n" : "") + "클릭: 선택 · 드래그: 카드 위에 놓으면 위치 교환, 카드 사이에 놓으면 순서 이동 · Ctrl+드래그: 복제 · Delete/Backspace: 삭제";
+      // 마우스를 올리면 스킬 정보 툴팁이 뜨므로(initCardTip) 기본 title 은 붙이지 않는다.
 
-      slot.addEventListener("click", () => {
+      slot.addEventListener("click", (e) => {
         // A drag should not accidentally select a different card.
         if (slot.dataset.wasDragged === "1") {
           slot.dataset.wasDragged = "0";
           return;
         }
+        // Shift/Ctrl(Cmd)+클릭: 선택 추가/제거
+        if (e.shiftKey || e.ctrlKey || e.metaKey) return toggleInSelection(i);
         selectCard(i);
       });
 
       slot.addEventListener("dragstart", (e) => {
+        hideCardTip();
         state.dragging = i;
-        slot.classList.add("is-dragging");
+        // 그룹에 속한 카드를 잡으면 그룹 전체를, 아니면 그 카드 한 장만 드래그한다.
+        const grp = groupIndices();
+        state.dragGroup = (grp.length >= 2 && grp.includes(i)) ? grp : null;
+        (state.dragGroup || [i]).forEach(k => slotEls[k] && slotEls[k].classList.add("is-dragging"));
         slot.dataset.wasDragged = "1";
         e.dataTransfer.effectAllowed = "copyMove";
         e.dataTransfer.setData("text/plain", String(i));
@@ -2383,7 +2487,8 @@ function renderGrid() {
 
       slot.addEventListener("dragend", () => {
         state.dragging = -1;
-        slot.classList.remove("is-dragging");
+        state.dragGroup = null;
+        document.querySelectorAll(".mc-slot.is-dragging").forEach(el => el.classList.remove("is-dragging"));
         document.querySelectorAll(".mc-slot.is-over, .mc-slot.is-insert-before, .mc-slot.is-insert-after").forEach(el => el.classList.remove("is-over", "is-insert-before", "is-insert-after"));
         setTimeout(() => { slot.dataset.wasDragged = "0"; }, 0);
       });
@@ -2394,6 +2499,8 @@ function renderGrid() {
     grid.appendChild(slot);
   }
   renderHeader();
+  renderSelectionBar();
+  refreshCardTip();
 }
 
 function copyCard(fromIndex, toIndex) {
@@ -2405,6 +2512,7 @@ function copyCard(fromIndex, toIndex) {
   copy.id = uid();
   delete copy.auto;
   state.deck[toIndex] = copy;
+  state.multi = new Set();
   state.selected = toIndex;
   state.dragging = -1;
   save();
@@ -2422,6 +2530,7 @@ function insertCard(fromIndex, toIndex) {
   arr.splice(toIndex, 0, card);
   while (arr.length && !arr[arr.length - 1]) arr.pop();
   state.deck = arr;
+  state.multi = new Set();
   state.selected = toIndex;
   state.dragging = -1;
   save();
@@ -2448,6 +2557,7 @@ function moveCard(fromIndex, toIndex) {
     state.deck[fromIndex] = target;
   }
 
+  state.multi = new Set();
   state.selected = toIndex;
   state.dragging = -1;
   save();
@@ -2470,7 +2580,373 @@ function renderEditor() {
   populateForm(card);
 }
 
+/* ============================================================
+ * 범위 선택(다중 선택)
+ * - 덱의 빈 곳(카드 바깥)에서 드래그하면 선택 상자가 그려지고, 상자에 닿은 카드가 선택된다.
+ *   Shift/Ctrl(Cmd)을 누른 채 드래그하면 기존 선택에 추가된다. Shift/Ctrl+클릭은 카드 한 장씩 선택 추가/제거.
+ * - 선택된 카드 중 하나를 드래그하면 전체가 함께 이동(Ctrl+드래그는 복제)하고,
+ *   Delete/Backspace 는 전체 삭제, Ctrl+C / Ctrl+V 는 여러 장 복사·붙여넣기가 된다.
+ * - 선택은 카드 id 로 기억하므로, 이동해도 선택이 유지된다.
+ * ============================================================ */
+function groupIndices() {
+  if (!state.multi.size) return [];
+  const out = [];
+  state.deck.forEach((c, k) => { if (c && state.multi.has(c.id)) out.push(k); });
+  return out;
+}
+
+function hasGroup() { return groupIndices().length >= 2; }
+
+// 현재 선택된 카드 id 들(그룹 선택이면 그룹, 아니면 단일 선택)
+function currentSelectionIds() {
+  const g = groupIndices();
+  if (g.length >= 2) return new Set(g.map(k => state.deck[k].id));
+  const c = selectedCard();
+  return new Set(c ? [c.id] : []);
+}
+
+// 카드 id 집합을 선택 상태로 반영: 0장 = 선택 해제 / 1장 = 일반 선택(에디터에 표시) / 2장 이상 = 그룹 선택
+function applySelection(ids) {
+  const list = [];
+  state.deck.forEach((c, k) => { if (c && ids.has(c.id)) list.push(k); });
+  if (list.length >= 2) {
+    state.multi = new Set(list.map(k => state.deck[k].id));
+    state.selected = -1;
+  } else {
+    state.multi = new Set();
+    state.selected = list.length ? list[0] : -1;
+  }
+  renderGrid();
+  renderEditor();
+}
+
+function toggleInSelection(i) {
+  const card = state.deck[i];
+  if (!card) return;
+  const ids = currentSelectionIds();
+  if (ids.has(card.id)) ids.delete(card.id); else ids.add(card.id);
+  applySelection(ids);
+}
+
+function gridColumnCount() {
+  const cols = getComputedStyle($("deckGrid")).gridTemplateColumns.split(" ").filter(Boolean).length;
+  return Math.max(1, cols);
+}
+
+// 그룹(indices)을 잡은 카드(from)에서 놓는 칸(to)까지의 (행, 열) 차이만큼 평행 이동했을 때의 슬롯 번호들.
+// 열이나 덱 범위를 벗어나는 카드가 하나라도 있으면 null.
+function groupDestination(indices, from, to) {
+  const cols = gridColumnCount();
+  const dr = Math.floor(to / cols) - Math.floor(from / cols);
+  const dc = (to % cols) - (from % cols);
+  const out = [];
+  for (const k of indices) {
+    const r = Math.floor(k / cols) + dr, c = (k % cols) + dc;
+    if (r < 0 || c < 0 || c >= cols) return null;
+    const idx = r * cols + c;
+    if (idx >= LIMIT.cards) return null;
+    out.push(idx);
+  }
+  return out;
+}
+
+// 그룹 이동. 도착 칸에 그룹이 아닌 카드가 있으면, 그 카드들은 그룹이 비운 칸으로 자리를 바꾼다
+// (밀려나는 카드 수 = 비워지는 칸 수 이므로 항상 성립. 한 장 이동 시의 '위치 교환'과 같은 규칙)
+function moveGroup(indices, dest) {
+  state.dragging = -1; state.dragGroup = null;
+  if (indices.every((k, n) => k === dest[n])) return;
+  const deck = Array.from({ length: LIMIT.cards }, (_, k) => state.deck[k] || null);
+  const src = new Set(indices), dst = new Set(dest);
+  const moving = indices.map(k => deck[k]);
+  const displaced = dest.filter(d => !src.has(d) && deck[d]).sort((a, b) => a - b).map(d => deck[d]);
+  const vacated = indices.filter(k => !dst.has(k)).sort((a, b) => a - b);
+  indices.forEach(k => { deck[k] = null; });
+  dest.forEach((d, n) => { deck[d] = moving[n]; });
+  displaced.forEach((c, n) => { deck[vacated[n]] = c; });
+  while (deck.length && !deck[deck.length - 1]) deck.pop();
+  state.deck = deck;
+  state.selected = -1;              // 그룹 선택(state.multi)은 id 기준이라 그대로 유지된다
+  save();
+  renderGrid();
+  renderEditor();
+}
+
+function cloneCard(src) {
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.id = uid();
+  delete copy.auto;
+  return copy;
+}
+
+// 그룹 복제(Ctrl+드래그): dest 는 모두 빈 슬롯이어야 한다. 복제된 카드들이 새 그룹 선택이 된다.
+function copyGroup(indices, dest) {
+  state.dragging = -1; state.dragGroup = null;
+  const clones = indices.map(k => cloneCard(state.deck[k]));
+  dest.forEach((d, n) => { state.deck[d] = clones[n]; });
+  save();
+  applySelection(new Set(clones.map(c => c.id)));
+  showNotice(`카드 ${clones.length}장이 복제되었습니다.`);
+}
+
+// 빈 슬롯 n 칸을 고른다. anchor 뒤의 빈 칸을 먼저, 부족하면 앞쪽 빈 칸을 쓴다. 모자라면 null.
+function pickEmptySlots(n, anchor = -1) {
+  const empty = [];
+  for (let k = 0; k < LIMIT.cards; k++) if (!state.deck[k]) empty.push(k);
+  if (empty.length < n) return null;
+  return empty.filter(k => k > anchor).concat(empty.filter(k => k <= anchor)).slice(0, n);
+}
+
+// 툴바의 '복제': 선택한 카드들을 빈 슬롯에 복제
+function duplicateGroup() {
+  const g = groupIndices();
+  if (!g.length) return;
+  const slots = pickEmptySlots(g.length, Math.max(...g));
+  if (!slots) return alert(`복제할 빈 슬롯이 부족합니다. (필요 ${g.length}칸)`);
+  const clones = g.map(k => cloneCard(state.deck[k]));
+  slots.forEach((d, n) => { state.deck[d] = clones[n]; });
+  save();
+  applySelection(new Set(clones.map(c => c.id)));
+  showNotice(`카드 ${clones.length}장이 복제되었습니다.`);
+}
+
+function deleteGroup() {
+  const g = groupIndices();
+  if (!g.length) return;
+  g.forEach(k => { state.deck[k] = null; });   // 다른 카드의 번호(위치)가 밀리지 않도록 해당 슬롯만 비운다
+  while (state.deck.length && !state.deck[state.deck.length - 1]) state.deck.pop();
+  state.multi = new Set();
+  state.selected = -1;
+  renderGrid(); renderEditor(); save();
+  showNotice(`카드 ${g.length}장을 삭제했습니다.`);
+}
+
+// Ctrl+V: 클립보드의 여러 장 카드 붙여넣기
+function pasteCards(rawList) {
+  const list = rawList.filter(c => c && typeof c === "object" && !Array.isArray(c));
+  if (!list.length) throw new Error("카드 데이터가 아닙니다.");
+  const g = groupIndices();
+  const slots = pickEmptySlots(list.length, g.length ? Math.max(...g) : state.selected);
+  if (!slots) return alert(`빈 슬롯이 부족합니다. (필요 ${list.length}칸)`);
+  const cards = list.map(p => {
+    const c = makeBlankCard();
+    Object.assign(c, p);
+    c.id = uid();
+    delete c.quantity;
+    delete c.auto;
+    return c;
+  });
+  slots.forEach((d, n) => { state.deck[d] = cards[n]; });
+  save();
+  applySelection(new Set(cards.map(c => c.id)));
+  showNotice(`카드 ${cards.length}장이 붙여넣어졌습니다.`);
+}
+
+// 화면 아래에 뜨는 '선택한 카드 N장' 작업 바
+function renderSelectionBar() {
+  const bar = $("selectionBar");
+  if (!bar) return;
+  const g = groupIndices();
+  bar.classList.toggle("hidden", g.length < 2);
+  if (g.length >= 2) {
+    const cost = g.reduce((n, k) => n + costOf(state.deck[k]), 0);
+    $("selectionCount").textContent = `${g.length}장 선택됨 · ${cost} COST`;
+  }
+}
+$("selDuplicate").addEventListener("click", duplicateGroup);
+$("selCopy").addEventListener("click", copySelectedCard);
+$("selDelete").addEventListener("click", deleteGroup);
+$("selClear").addEventListener("click", () => applySelection(new Set()));
+
+/* ---------- 범위 드래그(선택 상자) ---------- */
+let mq = null;   // 진행 중인 범위 드래그 상태
+const MQ_THRESHOLD = 4;   // px. 이보다 적게 움직이면 드래그가 아니라 클릭으로 본다
+const deckCardEl = document.querySelector(".deckCard");
+
+// 카드가 아닌 곳(덱 카드 바탕·그리드 틈·빈 슬롯)에서 시작한 경우만 범위 드래그로 취급
+function marqueeStartTarget(t) {
+  if (t === deckCardEl || t === $("deckGrid")) return "bg";
+  if (t.closest && t.closest(".mc-slot.is-empty")) return "slot";
+  return "";
+}
+
+function marqueeRect(m) {
+  const x1 = m.x0 - window.scrollX, y1 = m.y0 - window.scrollY;   // 시작점은 문서 좌표로 기억 → 스크롤해도 따라간다
+  return { left: Math.min(x1, m.cx), top: Math.min(y1, m.cy), right: Math.max(x1, m.cx), bottom: Math.max(y1, m.cy) };
+}
+
+// 선택 상자에 닿은 카드 슬롯을 표시하고, 해당 카드 id 집합을 돌려준다
+function marqueeHits(m) {
+  const r = marqueeRect(m), ids = new Set();
+  document.querySelectorAll("#deckGrid .mc-slot.mc-card-draggable").forEach(slot => {
+    const b = slot.getBoundingClientRect();
+    const hit = b.left < r.right && b.right > r.left && b.top < r.bottom && b.bottom > r.top;
+    slot.classList.toggle("is-marquee", hit);
+    const c = hit && state.deck[Number(slot.dataset.index)];
+    if (c) ids.add(c.id);
+  });
+  return ids;
+}
+
+function marqueeDraw() {
+  const r = marqueeRect(mq);
+  Object.assign(mq.el.style, {
+    left: r.left + "px", top: r.top + "px",
+    width: (r.right - r.left) + "px", height: (r.bottom - r.top) + "px"
+  });
+  marqueeHits(mq);
+}
+
+function marqueeMove(e) {
+  if (!mq || e.pointerId !== mq.pid) return;
+  mq.cx = e.clientX; mq.cy = e.clientY;
+  if (!mq.active) {
+    if (Math.hypot(mq.cx - (mq.x0 - window.scrollX), mq.cy - (mq.y0 - window.scrollY)) < MQ_THRESHOLD) return;
+    mq.active = true;
+    mq.el = document.createElement("div");
+    mq.el.className = "mc-marquee";
+    document.body.appendChild(mq.el);
+    document.body.classList.add("mc-marquee-active");
+    hideCardTip();
+  }
+  marqueeDraw();
+}
+
+function marqueeScroll() { if (mq && mq.active) marqueeDraw(); }
+function marqueeUp(e) { if (mq && e.pointerId === mq.pid) marqueeFinish(true); }
+function marqueeCancel(e) { if (mq && e.pointerId === mq.pid) marqueeFinish(false); }
+
+function marqueeFinish(commit) {
+  const m = mq;
+  if (!m) return;
+  window.removeEventListener("pointermove", marqueeMove);
+  window.removeEventListener("pointerup", marqueeUp);
+  window.removeEventListener("pointercancel", marqueeCancel);
+  window.removeEventListener("scroll", marqueeScroll);
+  const hits = (commit && m.active) ? marqueeHits(m) : null;
+  mq = null;
+  document.body.classList.remove("mc-marquee-active");
+  if (m.el) m.el.remove();
+  document.querySelectorAll("#deckGrid .is-marquee").forEach(el => el.classList.remove("is-marquee"));
+  if (!commit) return;
+
+  if (!m.active) {
+    // 그냥 클릭: 빈 바탕을 누르면 그룹 선택 해제 (빈 슬롯 클릭은 기존대로 카드 추가)
+    if (m.kind === "bg" && !m.additive && hasGroup()) applySelection(new Set());
+    return;
+  }
+  // 드래그가 끝난 뒤 브라우저가 보내는 click(빈 슬롯 위에서 놓은 경우 등)이 카드 추가로 이어지지 않게 막는다
+  const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+  deckCardEl.addEventListener("click", swallow, true);
+  setTimeout(() => deckCardEl.removeEventListener("click", swallow, true), 0);
+
+  applySelection(new Set([...(m.additive ? m.base : []), ...hits]));
+}
+
+deckCardEl.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || e.pointerType === "touch" || mq) return;   // 터치는 스크롤과 겹치므로 제외
+  const kind = marqueeStartTarget(e.target);
+  if (!kind) return;
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();  // 입력창에 커서가 남아 Delete 가 글자 삭제로 가지 않게
+  hideCardTip();
+  const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+  mq = {
+    pid: e.pointerId, kind, additive, active: false, el: null,
+    base: additive ? currentSelectionIds() : new Set(),
+    x0: e.clientX + window.scrollX, y0: e.clientY + window.scrollY,
+    cx: e.clientX, cy: e.clientY
+  };
+  window.addEventListener("pointermove", marqueeMove);
+  window.addEventListener("pointerup", marqueeUp);
+  window.addEventListener("pointercancel", marqueeCancel);
+  window.addEventListener("scroll", marqueeScroll, { passive: true });
+});
+// 드래그 시작 시 글자 선택 방지
+deckCardEl.addEventListener("mousedown", (e) => {
+  if (e.button === 0 && marqueeStartTarget(e.target)) e.preventDefault();
+});
+
+/* ============================================================
+ * 카드 호버 툴팁: 덱의 카드 위에 마우스를 올리면 그 카드의 스킬 정보를 보여 준다.
+ * (덱이 다시 그려져도 남아 있도록 그리드에 이벤트를 위임하고, 다시 그릴 때마다 refreshCardTip 으로 내용을 갱신)
+ * ============================================================ */
+const cardTip = document.createElement("div");
+cardTip.className = "mc-cardtip";
+cardTip.setAttribute("role", "tooltip");
+document.body.appendChild(cardTip);
+let tipIndex = -1;
+
+function cardTipHtml(card, i) {
+  const info = skillInfo(card.skill);
+  const d = SKILL_DETAILS.find(x => x.ko === info.ko);
+  let html = `<div class="mc-tip-card">${escapeHtml(card.name || `CARD #${i + 1}`)}</div>`;
+  if (!d || !d.type) {
+    html += `<div class="mc-tip-none">스킬 없음</div>`;
+  } else {
+    const tier = String(card.rarity);
+    const eff = (tier === "SR" || tier === "UR") ? rarityEffectFor(d, tier) : null;   // 이 카드의 레어도에서만 적용되는 추가 효과
+    html += `
+      <div class="mc-tip-skill">
+        <img src="${resourceFile("skills", d.en)}" alt="" onerror="this.style.display='none'">
+        <div class="mc-tip-skillname"><b>${escapeHtml(d.ko)}</b><small>${escapeHtml(d.en)}</small></div>
+        <strong class="mc-tip-cost">${d.cost} <small>COST</small></strong>
+      </div>
+      <div class="mc-tip-tags"><span data-type="${escapeHtml(d.type)}">${escapeHtml(d.type)}</span><span>${escapeHtml(d.category || "기타")}</span></div>
+      <p class="mc-tip-desc">${escapeHtml(d.description || "등록된 효과 설명이 없습니다.").replace(/\n/g, "<br>")}</p>
+      ${eff ? `<div class="mc-tip-tier" data-tier="${tier}"><b>${tier}</b><span>${escapeHtml(eff.text).replace(/\n/g, "<br>")}</span></div>` : ""}`;
+  }
+  if (card.auto) html += `<div class="mc-tip-auto">덱 맞춤으로 추가된 카드 (수정하면 고정됩니다)</div>`;
+  return html;
+}
+
+function placeCardTip(x, y) {
+  const gap = 16, margin = 8;
+  const w = cardTip.offsetWidth, h = cardTip.offsetHeight;
+  let left = x + gap, top = y + gap;
+  if (left + w > window.innerWidth - margin) left = x - gap - w;       // 오른쪽이 모자라면 커서 왼쪽에
+  if (top + h > window.innerHeight - margin) top = y - gap - h;         // 아래가 모자라면 커서 위쪽에
+  left = Math.max(margin, Math.min(left, window.innerWidth - w - margin));
+  top = Math.max(margin, top);
+  cardTip.style.left = left + "px";
+  cardTip.style.top = top + "px";
+}
+
+function showCardTip(i, x, y) {
+  const card = state.deck[i];
+  if (!card) return hideCardTip();
+  tipIndex = i;
+  cardTip.innerHTML = cardTipHtml(card, i);
+  cardTip.classList.add("show");
+  placeCardTip(x, y);
+}
+
+function hideCardTip() {
+  tipIndex = -1;
+  cardTip.classList.remove("show");
+}
+
+// 덱을 다시 그린 뒤: 마우스가 올라가 있던 카드가 그대로면 내용만 갱신, 사라졌으면 숨김
+function refreshCardTip() {
+  if (tipIndex < 0) return;
+  const card = state.deck[tipIndex];
+  if (!card) return hideCardTip();
+  cardTip.innerHTML = cardTipHtml(card, tipIndex);
+}
+
+$("deckGrid").addEventListener("pointermove", (e) => {
+  // 마우스로 카드 위를 지날 때만. 버튼을 누른 채(드래그·범위 선택)이거나 터치면 표시하지 않는다.
+  if (e.pointerType !== "mouse" || e.buttons || mq || state.dragging >= 0) return hideCardTip();
+  const slot = e.target.closest && e.target.closest(".mc-slot.mc-card-draggable");
+  const i = slot ? Number(slot.dataset.index) : -1;
+  if (i < 0 || !state.deck[i]) return hideCardTip();
+  if (i !== tipIndex) showCardTip(i, e.clientX, e.clientY);
+  else placeCardTip(e.clientX, e.clientY);
+});
+$("deckGrid").addEventListener("pointerleave", hideCardTip);
+window.addEventListener("scroll", hideCardTip, { passive: true });
+window.addEventListener("blur", hideCardTip);
+
 function selectCard(index) {
+  state.multi = new Set();
   state.selected = index;
   renderGrid();
   renderEditor();
@@ -2486,23 +2962,35 @@ function addCard(preferredIndex = -1) {
   if (index >= LIMIT.cards) return;
   const card = makeBlankCard();
   state.deck[index] = card;
+  state.multi = new Set();
   state.selected = index;
   renderGrid(); renderEditor(); save();
 }
 
 async function copySelectedCard() {
-  const card = selectedCard();
-  if (!card) return alert("먼저 복사할 카드를 선택하세요.");
-
-  // A small custom wrapper lets this work independently from deck JSON files.
-  const payload = {
-    format: "MONSTER_CARDS_CARD_CLIPBOARD_V1",
-    card: JSON.parse(JSON.stringify(card))
-  };
+  // 범위 선택(2장 이상)이면 선택한 카드 전부, 아니면 선택한 카드 한 장을 복사한다.
+  const group = groupIndices();
+  let payload, okMsg;
+  if (group.length >= 2) {
+    payload = {
+      format: "MONSTER_CARDS_CARDS_CLIPBOARD_V1",
+      cards: group.map(k => JSON.parse(JSON.stringify(state.deck[k])))
+    };
+    okMsg = `카드 ${group.length}장이 클립보드에 복사되었습니다.`;
+  } else {
+    const card = selectedCard();
+    if (!card) return alert("먼저 복사할 카드를 선택하세요.");
+    // A small custom wrapper lets this work independently from deck JSON files.
+    payload = {
+      format: "MONSTER_CARDS_CARD_CLIPBOARD_V1",
+      card: JSON.parse(JSON.stringify(card))
+    };
+    okMsg = "카드가 클립보드에 복사되었습니다.";
+  }
 
   try {
     await navigator.clipboard.writeText(JSON.stringify(payload));
-    showNotice("카드가 클립보드에 복사되었습니다.");
+    showNotice(okMsg);
   } catch (_) {
     // Clipboard API may be unavailable when the file is opened directly.
     // Fall back to a temporary textarea.
@@ -2514,7 +3002,7 @@ async function copySelectedCard() {
     textarea.select();
     try {
       document.execCommand("copy");
-      showNotice("카드가 클립보드에 복사되었습니다.");
+      showNotice(okMsg);
     } catch (err) {
       alert("카드 복사에 실패했습니다. 브라우저의 클립보드 권한을 확인해주세요.");
     }
@@ -2535,6 +3023,10 @@ async function pasteCard() {
 
   try {
     const data = JSON.parse(text);
+    if (data && data.format === "MONSTER_CARDS_CARDS_CLIPBOARD_V1" && Array.isArray(data.cards)) {
+      pasteCards(data.cards);   // 여러 장 붙여넣기
+      return;
+    }
     const pasted = data && data.format === "MONSTER_CARDS_CARD_CLIPBOARD_V1"
       ? data.card
       : (data && data.card && typeof data.card === "object" ? data.card : data);
@@ -2558,6 +3050,7 @@ async function pasteCard() {
     if (index >= LIMIT.cards) return alert("덱에 카드를 넣을 빈 슬롯이 없습니다.");
 
     state.deck[index] = card;
+    state.multi = new Set();
     state.selected = index;
     save();
     renderGrid();
@@ -2583,6 +3076,7 @@ function showNotice(message) {
 }
 
 function deleteSelected() {
+  if (hasGroup()) return deleteGroup();   // 범위 선택 상태면 선택한 카드 전부 삭제
   if (state.selected < 0 || !state.deck[state.selected]) return;
   // 다른 카드의 번호(위치)가 밀리지 않도록 해당 슬롯만 비웁니다.
   state.deck[state.selected] = null;
@@ -2643,6 +3137,11 @@ document.querySelectorAll(".mc-mu-tab").forEach(btn => {
 });
 
 document.addEventListener("keydown", (e) => {
+  // Esc: 진행 중인 범위 드래그 취소 / 범위 선택 해제
+  if (e.key === "Escape") {
+    if (mq) { marqueeFinish(false); return; }
+    if (!$("deckPage").classList.contains("hidden") && hasGroup()) { applySelection(new Set()); return; }
+  }
   // Do not intercept normal copy/paste while typing in form fields.
   const tag = document.activeElement && document.activeElement.tagName;
   const editing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
@@ -2650,14 +3149,14 @@ document.addEventListener("keydown", (e) => {
   if ($("deckPage").classList.contains("hidden")) return; // 스킬 페이지에서는 무시
 
   // Delete / Backspace: 선택한 카드 삭제
-  if ((e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey && !e.altKey && selectedCard()) {
+  if ((e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey && !e.altKey && (hasGroup() || selectedCard())) {
     e.preventDefault();
     deleteSelected();
     return;
   }
 
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
-    if (selectedCard()) {
+    if (hasGroup() || selectedCard()) {
       e.preventDefault();
       copySelectedCard();
     }
@@ -2674,11 +3173,13 @@ function escapeHtml(s) {
 }
 
 function normalizeDeck(arr) {
+  const seen = new Set();   // 범위 선택은 카드 id 로 추적하므로 id 는 덱 안에서 유일해야 한다
   const deck = (Array.isArray(arr) ? arr : []).slice(0, LIMIT.cards).map(c => {
     if (!c || typeof c !== "object") return null;
     const copy = { ...c };
     delete copy.quantity; // 수량 개념 제거
-    if (!copy.id) copy.id = uid();
+    if (!copy.id || seen.has(copy.id)) copy.id = uid();
+    seen.add(copy.id);
     return copy;
   });
   while (deck.length && !deck[deck.length - 1]) deck.pop();
@@ -2724,6 +3225,7 @@ $("importInput").addEventListener("change", async (e) => {
     const cards = Array.isArray(data) ? data : data.cards;
     if (!Array.isArray(cards)) throw new Error("cards 배열이 없습니다.");
     state.deck = normalizeDeck(cards);
+    state.multi = new Set();
     state.selected = state.deck.findIndex(Boolean);
     save(); renderGrid(); renderEditor();
   } catch (err) {
@@ -3013,6 +3515,7 @@ function autoFillDeck() {
   while (trimmed.length && !trimmed[trimmed.length - 1]) trimmed.pop();
   autoUndo = { deck: snapshot, selected: state.selected };
   state.deck = trimmed;
+  state.multi = new Set();
   state.selected = keepSelected;
 
   save.keepUndo = true; save(); save.keepUndo = false;
@@ -3032,6 +3535,7 @@ function undoAutoFill() {
   const deck = snap.deck.slice();
   while (deck.length && !deck[deck.length - 1]) deck.pop();
   state.deck = deck;
+  state.multi = new Set();
   state.selected = state.deck[snap.selected] ? snap.selected : -1;
   autoUndo = null;
   save();
@@ -3051,7 +3555,7 @@ $("undoAutoBtn").addEventListener("click", undoAutoFill);
 
 $("newDeckBtn").addEventListener("click", () => {
   if (!confirm("현재 덱을 비우고 새 덱을 만들까요?")) return;
-  state.deck = []; state.selected = -1; save(); renderGrid(); renderEditor();
+  state.deck = []; state.multi = new Set(); state.selected = -1; save(); renderGrid(); renderEditor();
 });
 
 const notes = DATA.compatibilityNotes;
@@ -3595,6 +4099,7 @@ function initSkillPage() {
 
 function switchPage(page) {
   const deck = page === "deck";
+  hideCardTip();
   $("deckPage").classList.toggle("hidden", !deck);
   $("skillPage").classList.toggle("hidden", deck);
   $("deckPageBtn").classList.toggle("active", deck);
